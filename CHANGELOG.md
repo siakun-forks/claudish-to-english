@@ -5,6 +5,32 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **`claude` provider: rewrite on your Claude plan, with no API key.** Claude
+  Code users could already reach Anthropic models only through an API key
+  (billed apart from their plan) or the unofficial oauth mode, which replays
+  the CLI's token from outside it. `CLAUDISH_PROVIDER=claude` runs
+  `claude -p` instead, the CLI's own headless mode, so the request is the
+  CLI's and counts against the plan like any `claude -p` script. Default
+  model: the `haiku` alias, which follows the current Haiku.
+  - The child is a bare rewriter: no settings files, hooks, plugins (this
+    one included), MCP servers, tools, or CLAUDE.md files; the rewrite prompt
+    is its whole system prompt; it runs outside any project and is not saved
+    for `claude --resume`. `CLAUDISH_ENABLED=0` in its environment is a
+    second guard against the plugin rewriting its own rewrite.
+  - `CLAUDISH_CLAUDE_EFFORT` sets `--effort` (default `low`; empty omits it).
+    The child loads no settings, so the user's `effortLevel` never applies.
+  - `CLAUDISH_CLAUDE_OAUTH_TOKEN` covers sessions that log in through
+    `CLAUDE_CODE_OAUTH_TOKEN` (`claude setup-token`). Claude Code strips that
+    variable from every hook's environment, so without a stored login the
+    child would start logged out. The token reaches the child through its
+    environment, never its command line, and the notice for a logged-out
+    child names both fixes.
+  - The message travels on stdin, not argv, which Windows caps at 32K
+    characters.
+
 ## [0.10.0] - 2026-10-09
 
 ### Added

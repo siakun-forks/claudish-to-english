@@ -20,6 +20,13 @@
 #   codex      the OpenAI codex CLI, non-interactively (codex exec); uses the
 #              CLI's own login, so no API key and no local model server. The
 #              rewrite runs with --sandbox read-only outside any repo.
+#   claude     the Claude Code CLI, non-interactively (claude -p); uses the
+#              CLI's own login, so rewrites count against the Claude plan with
+#              no API key. The child session loads no settings, hooks,
+#              plugins, MCP servers, tools, or CLAUDE.md files. A stored login
+#              (claude auth login) reaches it; a CLAUDE_CODE_OAUTH_TOKEN login
+#              does not, because Claude Code strips that variable from every
+#              hook's environment. CLAUDISH_CLAUDE_OAUTH_TOKEN covers that case.
 #   anthropic  Anthropic Messages API; key from CLAUDISH_ANTHROPIC_KEY or
 #              ANTHROPIC_API_KEY; base URL from CLAUDISH_ANTHROPIC_URL
 #   openai     any OpenAI-compatible /chat/completions endpoint (OpenAI,
@@ -44,6 +51,13 @@
 #   CLAUDISH_CODEX_EFFORT   model_reasoning_effort for the codex provider (e.g.
 #                           "low"). Unset uses the codex CLI's configured
 #                           effort. Applies to the rewrite only.
+#   CLAUDISH_CLAUDE_EFFORT  --effort for the claude provider. Unset defaults to
+#                           "low". Set it EMPTY (CLAUDISH_CLAUDE_EFFORT=) to
+#                           omit the flag.
+#   CLAUDISH_CLAUDE_OAUTH_TOKEN  a `claude setup-token` token for the claude
+#                           provider, handed to the child as
+#                           CLAUDE_CODE_OAUTH_TOKEN (environment, never argv).
+#                           Unset leaves the child on the CLI's stored login.
 #
 # The caller must define dbg() and set LLM_TIMEOUT before calling
 # llm_complete, and may set TIMEOUT_HINT to customize llm_notice_why's
@@ -85,10 +99,21 @@ else
   OPENAI_EFFORT=""
 fi
 
+# Same explicit-empty rule for the claude provider. Unlike codex, the default
+# is not "the CLI's configured effort": the child loads no settings file, so
+# the user's effortLevel never reaches it anyway, and a plain rewrite needs no
+# deliberation, so "low" keeps it quick.
+if [ -n "${CLAUDISH_CLAUDE_EFFORT+x}" ]; then
+  CLAUDE_EFFORT_ARG="$CLAUDISH_CLAUDE_EFFORT"
+else
+  CLAUDE_EFFORT_ARG="low"
+fi
+
 case "$PROVIDER" in
   anthropic) MODEL="${CLAUDISH_MODEL:-claude-haiku-4-5}" ;;
   openai)    MODEL="${CLAUDISH_MODEL:-gpt-5.6-luna}" ;;
   codex)     MODEL="${CLAUDISH_MODEL:-}" ;;  # empty = the codex CLI's configured default
+  claude)    MODEL="${CLAUDISH_MODEL:-haiku}" ;;  # an alias: follows the current Haiku
   *)         MODEL="${CLAUDISH_MODEL:-gemma4:26b-mlx}" ;;
 esac
 
@@ -309,6 +334,74 @@ $_user" >/dev/null 2>"$_errf" &
       fi
       rm -f "$_out" "$_errf" 2>/dev/null
       ;;
+    claude)
+      if ! command -v claude >/dev/null 2>&1; then
+        dbg "claude: CLI not found"; curl_rc=1; return 0
+      fi
+      _in="$(mktemp "${TMPDIR:-/tmp}/claudish-claude-in.XXXXXX" 2>/dev/null)" || return 2
+      _out="$(mktemp "${TMPDIR:-/tmp}/claudish-claude-out.XXXXXX" 2>/dev/null)" || { rm -f "$_in"; return 2; }
+      _errf="$(mktemp "${TMPDIR:-/tmp}/claudish-claude-err.XXXXXX" 2>/dev/null)" || { rm -f "$_in" "$_out"; return 2; }
+      trap 'rm -f "$_in" "$_out" "$_errf" 2>/dev/null' EXIT
+      # The message goes on stdin, not argv: Windows caps a whole command line
+      # at 32K characters, and a long answer would not fit.
+      printf '%s' "$_user" > "$_in" 2>/dev/null || { rm -f "$_in" "$_out" "$_errf"; return 2; }
+      # The child must be a bare rewriter, not a second copy of the user's
+      # session:
+      #   --setting-sources ""      no settings file loads, so none of the
+      #                             user's hooks, plugins (this one included),
+      #                             output style, or CLAUDE.md files do
+      #   --strict-mcp-config       no MCP servers; they live in ~/.claude.json,
+      #                             which setting sources do not cover
+      #   --tools ""                a rewrite needs no tools
+      #   --system-prompt           replaces Claude Code's own coding prompt
+      #   --no-session-persistence  rewrites stay out of `claude --resume`
+      # CLAUDISH_ENABLED=0 is a second recursion guard: should this plugin load
+      # in the child anyway, its hooks pass the child's reply through instead
+      # of starting another child. The subshell moves the child to TMPDIR,
+      # outside any project, and scopes the token hand-off below to the child
+      # alone; `exec` makes $! the claude process itself, so the timeout kills
+      # the rewrite rather than a wrapper shell.
+      # No timeout(1) on stock macOS, so background the call and kill on expiry.
+      ( cd "${TMPDIR:-/tmp}" 2>/dev/null
+        export CLAUDISH_ENABLED=0
+        if [ -n "${CLAUDISH_CLAUDE_OAUTH_TOKEN:-}" ]; then
+          export CLAUDE_CODE_OAUTH_TOKEN="$CLAUDISH_CLAUDE_OAUTH_TOKEN"
+        fi
+        exec claude -p --model "$MODEL" \
+          ${CLAUDE_EFFORT_ARG:+--effort "$CLAUDE_EFFORT_ARG"} \
+          --system-prompt "$_sys" --tools "" --setting-sources "" \
+          --strict-mcp-config --no-session-persistence --output-format json
+      ) <"$_in" >"$_out" 2>"$_errf" &
+      _pid=$!
+      _t=0
+      while kill -0 "$_pid" 2>/dev/null; do
+        if [ "$_t" -ge "$LLM_TIMEOUT" ]; then
+          kill -TERM "$_pid" 2>/dev/null; wait "$_pid" 2>/dev/null
+          curl_rc=28
+          rm -f "$_in" "$_out" "$_errf" 2>/dev/null
+          dbg "claude timed out after ${LLM_TIMEOUT}s"
+          return 0
+        fi
+        sleep 1; _t=$((_t + 1))
+      done
+      wait "$_pid"; _rc=$?
+      resp="$(cat "$_out" 2>/dev/null)"
+      # A failed run still answers with a JSON result: is_error, and the
+      # reason in .result ("Not logged in · Please run /login").
+      if [ "$(printf '%s' "$resp" | jq -r '.is_error // false' 2>/dev/null)" = "true" ]; then
+        err="$(printf '%s' "$resp" | jq -r '.result // empty' 2>/dev/null)"
+      else
+        rewrite="$(printf '%s' "$resp" | jq -j '.result // empty' 2>/dev/null)"
+        finish="$(printf '%s' "$resp" | jq -r '.stop_reason // empty' 2>/dev/null)"
+        [ "$finish" = "max_tokens" ] && { truncated=1; rewrite=""; }
+      fi
+      if [ "$_rc" != "0" ] && [ -z "$err" ]; then
+        err="$(tail -c 400 "$_errf" 2>/dev/null)"
+        err="${err:-claude -p failed with exit $_rc}"
+      fi
+      [ -n "$err" ] && rewrite=""
+      rm -f "$_in" "$_out" "$_errf" 2>/dev/null
+      ;;
     *)
       req="$(jq -n --arg m "$MODEL" --arg s "$_sys" --arg u "$_user" \
             '{model:$m,stream:false,think:false,options:{temperature:0.3},messages:[{role:"system",content:$s},{role:"user",content:$u}]}' 2>/dev/null)"
@@ -394,6 +487,22 @@ llm_notice_why() {
         NOTICE_WHY="the rewrite timed out after ${LLM_TIMEOUT}s — ${TIMEOUT_HINT:-raise the timeout}"
       elif [ -n "${err:-}" ]; then
         NOTICE_WHY="codex error: ${err}"
+      fi
+      ;;
+    claude)
+      if ! command -v claude >/dev/null 2>&1; then
+        NOTICE_WHY="the claude CLI is not on PATH (install Claude Code or pick another CLAUDISH_PROVIDER), so rewrites are off"
+      elif [ "${truncated:-0}" = "1" ]; then
+        NOTICE_WHY="the rewrite hit the model's output-token limit and was discarded rather than shown half-finished — use a shorter message"
+      elif [ "$curl_rc" = "28" ]; then
+        NOTICE_WHY="the rewrite timed out after ${LLM_TIMEOUT}s — ${TIMEOUT_HINT:-raise the timeout}"
+      elif printf '%s' "${err:-}" | grep -qi 'not logged in'; then
+        # Claude Code strips CLAUDE_CODE_OAUTH_TOKEN from every hook's
+        # environment, so a session that logs in through that variable leaves
+        # the child with no credentials unless one of these is in place.
+        NOTICE_WHY="the claude CLI is not logged in for hooks (Claude Code does not pass CLAUDE_CODE_OAUTH_TOKEN to them) — set CLAUDISH_CLAUDE_OAUTH_TOKEN to a \`claude setup-token\` token, or run \`claude auth login\` once; rewrites are off"
+      elif [ -n "${err:-}" ]; then
+        NOTICE_WHY="claude error: ${err}"
       fi
       ;;
     *)

@@ -48,9 +48,10 @@
 #                                     rewrites. Set it EMPTY to ignore the settings
 #                                     key, or to "English" to force English.
 #                                     See lang.sh
-#   CLAUDISH_PROVIDER  ollama|anthropic|openai  which LLM serves rewrites (default
-#                                     ollama; keys, base URLs, and per-provider model
-#                                     defaults are documented in providers.sh)
+#   CLAUDISH_PROVIDER  <name>         which LLM serves rewrites: ollama (default),
+#                                     codex, claude, anthropic, or openai. Keys,
+#                                     base URLs, and per-provider model defaults
+#                                     are documented in providers.sh
 #   CLAUDISH_MODEL     <model>        overrides the provider's default model
 #   CLAUDISH_OLLAMA    <base url>     (default http://localhost:11434)
 #   CLAUDISH_MIN_CHARS <n>            skip files whose prose (code stripped) is shorter than this many CHARACTERS (default 200)
@@ -90,7 +91,7 @@ pass_through() { dbg "pass_through: ${1:-}"; exit 0; }
 
 SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# Provider layer (ollama/anthropic/openai): MODEL/OLLAMA defaults,
+# Provider layer (ollama/codex/claude/anthropic/openai): MODEL/OLLAMA defaults,
 # llm_complete, llm_notice_why. Missing file -> fail open.
 . "$SELF_DIR/providers.sh" 2>/dev/null || pass_through "no providers.sh"
 

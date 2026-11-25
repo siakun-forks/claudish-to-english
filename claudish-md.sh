@@ -167,8 +167,12 @@ case "$src" in
 esac
 if [ "$is_url" = "1" ]; then
   command -v curl >/dev/null 2>&1 || die "curl is required to fetch a URL"
-elif [ "$PROVIDER" != "codex" ]; then
-  command -v curl >/dev/null 2>&1 || die "curl is required for the $PROVIDER provider"
+else
+  # The CLI providers run a local program, not an HTTP request.
+  case "$PROVIDER" in
+    codex|claude) ;;
+    *) command -v curl >/dev/null 2>&1 || die "curl is required for the $PROVIDER provider" ;;
+  esac
 fi
 
 # Map a link to a rendered page onto its raw file (see the header). Anything

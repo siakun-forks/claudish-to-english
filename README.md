@@ -9,7 +9,8 @@
 
 A Claude Code plugin that shows a **plain-English rewrite** of each assistant
 message, produced by a **local LLM via ollama** (default), the **codex CLI**,
-the **Anthropic API**, or any **OpenAI-compatible API**. It is **display-only**:
+the **Claude Code CLI** (on your Claude plan), the **Anthropic API**, or any
+**OpenAI-compatible API**. It is **display-only**:
 Claude's own reasoning and the saved transcript keep the original text — only
 what you read on screen changes.
 
@@ -34,8 +35,8 @@ file, URL, or pasted text **on demand** — `/claudish file <path or URL>` in a 
 
 With the default `ollama` provider this plugin shells out to a **local** model,
 and nothing works until these are in place. (With `CLAUDISH_PROVIDER=anthropic`
-or `openai` you need only `jq`, `curl`, and an API key — see
-[Providers](#providers).)
+or `openai` you need only `jq`, `curl`, and an API key; with `codex` or
+`claude`, `jq` and that CLI, logged in — see [Providers](#providers).)
 
 <a id="macos-setup"></a>
 <details>
@@ -526,7 +527,7 @@ file, the absolute path written is printed on stdout.
 
 ## Providers
 
-Rewrites go through one of four providers, selected with `CLAUDISH_PROVIDER`
+Rewrites go through one of five providers, selected with `CLAUDISH_PROVIDER`
 (both hooks share the setting). The default is unchanged from upstream: local
 ollama, nothing leaves your machine.
 
@@ -534,6 +535,7 @@ ollama, nothing leaves your machine.
 |---|---|---|---|
 | `ollama` (default) | `CLAUDISH_OLLAMA` (`http://localhost:11434`) | none | `gemma4:26b-mlx` |
 | `codex` | OpenAI codex CLI (`codex exec`) — uses the CLI's own login | none | *(CLI default)* |
+| `claude` | Claude Code CLI (`claude -p`) — uses the CLI's own login, on your Claude plan | none (see [claude](#claude) for token logins) | `haiku` |
 | `anthropic` | `CLAUDISH_ANTHROPIC_URL` (`https://api.anthropic.com`) + `/v1/messages` | `CLAUDISH_ANTHROPIC_KEY` or `ANTHROPIC_API_KEY` | `claude-haiku-4-5` |
 | `openai` | `CLAUDISH_OPENAI_URL` + `/chat/completions` | `CLAUDISH_OPENAI_KEY` or `OPENAI_API_KEY` | `gpt-5.6-luna` |
 
@@ -546,6 +548,38 @@ the CLI's configured model; unset uses the CLI default. `CLAUDISH_CODEX_EFFORT`
 overrides the CLI's reasoning effort for the rewrite only (e.g. `low` keeps a
 per-message rewrite fast even when the CLI's coding default is a high-effort
 tier). Requires `codex` on PATH; fails open like every other provider.
+
+### claude
+
+`CLAUDISH_PROVIDER=claude` runs the rewrite through the Claude Code CLI itself
+(`claude -p`), on the CLI's own login, so rewrites count against your Claude
+plan instead of a separately billed API key. Unlike
+`CLAUDISH_ANTHROPIC_AUTH=oauth` below, the plugin never reads Claude Code's
+stored credential or sends it from outside the CLI: Claude Code makes the
+request the way it does for any `claude -p` script. The
+default model is the `haiku` alias, which follows the current Haiku;
+`CLAUDISH_MODEL` takes any name `claude --model` accepts.
+
+The child session is a bare rewriter. It runs from the temp directory with no
+settings files, hooks, plugins, MCP servers, tools, or CLAUDE.md files
+(`--setting-sources ""`, `--strict-mcp-config`, `--tools ""`), the rewrite
+prompt as its whole system prompt, and `--no-session-persistence`, so rewrites
+never show up in `claude --resume`. `CLAUDISH_CLAUDE_EFFORT` sets its effort
+(default `low`; set it empty to omit the flag).
+
+**Logging in.** A login stored by `claude auth login` (or `/login`) reaches the
+child as is. A session that logs in through `CLAUDE_CODE_OAUTH_TOKEN` (a
+`claude setup-token` token) does not: Claude Code strips that variable from
+every hook's environment. For that setup, put a `claude setup-token` token in
+`CLAUDISH_CLAUDE_OAUTH_TOKEN`, wherever you keep `CLAUDE_CODE_OAUTH_TOKEN`
+itself (your shell or OS environment, not a settings file you check in). The
+hook hands it to the child as `CLAUDE_CODE_OAUTH_TOKEN` through the
+environment, never the command line. With neither in place, the
+once-per-session notice says so and rewrites stay off.
+
+Each rewrite starts a fresh `claude` process, so expect a few seconds per
+message on top of the model's own time. Requires `claude` on PATH; fails open
+like every other provider.
 
 > [!CAUTION]
 > The cloud providers pick their key up from the **ambient environment**
@@ -645,7 +679,7 @@ Notes:
 | `CLAUDISH_PROMPT_FILE` | *(unset)* | Path to a file whose contents replace the display hook's system prompt (whole prompt, not merged). Empty/unreadable falls back to the built-in default. See [Customizing the rewrite prompt](#customizing-the-rewrite-prompt). |
 | `CLAUDISH_LANG` | *(unset)* | Language to rewrite into, e.g. `Esperanto`. Unset falls back to the `language` key in `.claude/settings*.json`; with neither set, the rewrite keeps the input's language. Empty ignores the settings key; `English` forces English. See [Output language](#output-language). |
 | `CLAUDISH_LANG_FILE` | `~/.claude/claudish-lang` | Runtime language override: a language name in this file wins over `CLAUDISH_LANG` and the settings key, re-checked every message. Written by `/claudish language <name>`. See [Controlling it live](#controlling-it-live-claudish). |
-| `CLAUDISH_PROVIDER` | `ollama` | `ollama`, `codex`, `anthropic`, or `openai` — which LLM serves rewrites (both hooks). |
+| `CLAUDISH_PROVIDER` | `ollama` | `ollama`, `codex`, `claude`, `anthropic`, or `openai` — which LLM serves rewrites (both hooks). |
 | `CLAUDISH_MODEL` | *(per provider)* | Model name; overrides the provider default (see [Providers](#providers)). The ollama default `gemma4:26b-mlx` is MLX (Apple-silicon only; Windows users must override). |
 | `CLAUDISH_MODEL_FILE` | `~/.claude/claudish-model` | Runtime model override: a model name in this file wins over `CLAUDISH_MODEL`, re-checked every message (applies to whatever provider is configured). Written by `/claudish model <name>`. See [Controlling it live](#controlling-it-live-claudish). |
 | `CLAUDISH_OLLAMA` | `http://localhost:11434` | ollama base URL. |
@@ -655,6 +689,8 @@ Notes:
 | `CLAUDISH_ANTHROPIC_URL` | `https://api.anthropic.com` | Base URL for the anthropic provider — override for proxies/gateways that speak the Messages API. |
 | `CLAUDISH_OPENAI_EFFORT` | `none` on api.openai.com, else *(unset)* | `reasoning_effort` sent with openai-provider requests. Set explicitly empty to omit the field. |
 | `CLAUDISH_CODEX_EFFORT` | *(unset)* | `model_reasoning_effort` for the codex provider (e.g. `low`). Unset uses the codex CLI's configured effort. Applies to the rewrite only. |
+| `CLAUDISH_CLAUDE_EFFORT` | `low` | `--effort` for the claude provider. Set explicitly empty to omit the flag. The child loads no settings, so your own `effortLevel` never applies to it. |
+| `CLAUDISH_CLAUDE_OAUTH_TOKEN` | *(unset)* | A `claude setup-token` token for the claude provider, handed to the child as `CLAUDE_CODE_OAUTH_TOKEN`. Needed only when your sessions log in through `CLAUDE_CODE_OAUTH_TOKEN`, which Claude Code strips from hooks. See [claude](#claude). |
 | `CLAUDISH_MAX_TOKENS` | `4096` | Completion cap for the anthropic provider. Rewrites that hit the cap are discarded (fail-open), with a notice to raise it. |
 | `CLAUDISH_MIN_CHARS` | `200` | Skip messages/files whose prose (code stripped) is shorter than this. Counted in **characters**, so one threshold means the same length in every script. |
 | `CLAUDISH_STUB` | `0` | `1` = deterministic stub instead of the model (for testing display mechanics). |
@@ -713,9 +749,11 @@ see — much slower for identical output quality on this simple task. Keep it of
 
 With the default provider the rewriter runs **entirely locally** against
 ollama, so **no conversation content leaves your machine**. Setting
-`CLAUDISH_PROVIDER` to `anthropic` or `openai` changes that deliberately: every
-rewritten assistant message (and, with the Markdown hook enabled or when you
-run `claudish-md.sh` / `/claudish file`, file contents) is sent to that API.
+`CLAUDISH_PROVIDER` to `anthropic`, `openai`, `codex`, or `claude` changes that
+deliberately: every rewritten assistant message (and, with the Markdown hook
+enabled or when you run `claudish-md.sh` / `/claudish file`, file contents) is
+sent to that service. With `claude` that is Anthropic, the service your
+session already talks to.
 Giving `claudish-md.sh` a URL also makes a plain download request to that host,
 whatever the provider. The same applies to pointing `CLAUDISH_OLLAMA`
 or `CLAUDISH_OPENAI_URL` at a remote/hosted endpoint. Don't switch away from
@@ -740,7 +778,7 @@ claudish-to-english/
 ├── md-core.sh              # Markdown frontmatter split + prompt, shared by rewrite-md.sh and claudish-md.sh
 ├── claudish-ctl.sh         # runtime state switcher + dashboard backing /claudish (writes the flag files)
 ├── session-notice.sh       # SessionStart hook: announces leftover /claudish overrides on a new session
-├── providers.sh            # provider layer (ollama/anthropic/openai), sourced by both hooks
+├── providers.sh            # provider layer (ollama/codex/claude/anthropic/openai), sourced by both hooks
 ├── lang.sh                 # output-language resolver (env + .claude/settings*.json), sourced by both hooks
 ├── CHANGELOG.md            # notable changes per version (Keep a Changelog)
 ├── LICENSE
