@@ -26,7 +26,8 @@
 #              plugins, MCP servers, tools, or CLAUDE.md files. A stored login
 #              (claude auth login) reaches it; a CLAUDE_CODE_OAUTH_TOKEN login
 #              does not, because Claude Code strips that variable from every
-#              hook's environment. CLAUDISH_CLAUDE_OAUTH_TOKEN covers that case.
+#              hook's environment. CLAUDISH_CLAUDE_OAUTH_TOKEN or
+#              CLAUDISH_CLAUDE_TOKEN_HELPER covers that case.
 #   anthropic  Anthropic Messages API; key from CLAUDISH_ANTHROPIC_KEY or
 #              ANTHROPIC_API_KEY; base URL from CLAUDISH_ANTHROPIC_URL
 #   openai     any OpenAI-compatible /chat/completions endpoint (OpenAI,
@@ -57,7 +58,13 @@
 #   CLAUDISH_CLAUDE_OAUTH_TOKEN  a `claude setup-token` token for the claude
 #                           provider, handed to the child as
 #                           CLAUDE_CODE_OAUTH_TOKEN (environment, never argv).
-#                           Unset leaves the child on the CLI's stored login.
+#   CLAUDISH_CLAUDE_TOKEN_HELPER  a command (run with sh -c) that prints that
+#                           token, like Claude Code's own apiKeyHelper, so the
+#                           token can stay in a password manager instead of
+#                           the environment. Used only when
+#                           CLAUDISH_CLAUDE_OAUTH_TOKEN is unset; it runs on
+#                           every rewrite, so it must return promptly. With
+#                           neither set, the child uses the CLI's stored login.
 #
 # The caller must define dbg() and set LLM_TIMEOUT before calling
 # llm_complete, and may set TIMEOUT_HINT to customize llm_notice_why's
@@ -345,6 +352,21 @@ $_user" >/dev/null 2>"$_errf" &
       # The message goes on stdin, not argv: Windows caps a whole command line
       # at 32K characters, and a long answer would not fit.
       printf '%s' "$_user" > "$_in" 2>/dev/null || { rm -f "$_in" "$_out" "$_errf"; return 2; }
+      # The token for a session that logs in through CLAUDE_CODE_OAUTH_TOKEN,
+      # which Claude Code strips from every hook: a direct value first, then
+      # the helper command. A helper that prints nothing is a setup error the
+      # notice must name; left to the child it would read as "not logged in".
+      _tok="${CLAUDISH_CLAUDE_OAUTH_TOKEN:-}"
+      if [ -z "$_tok" ] && [ -n "${CLAUDISH_CLAUDE_TOKEN_HELPER:-}" ]; then
+        _tok="$(sh -c "$CLAUDISH_CLAUDE_TOKEN_HELPER" 2>/dev/null)"
+        if [ -z "$_tok" ]; then
+          cfgerr=1
+          err="CLAUDISH_CLAUDE_TOKEN_HELPER printed no token (run it in a terminal to see why). Nothing was sent"
+          rm -f "$_in" "$_out" "$_errf" 2>/dev/null
+          dbg "claude: token helper printed nothing"
+          return 0
+        fi
+      fi
       # The child must be a bare rewriter, not a second copy of the user's
       # session:
       #   --setting-sources ""      no settings file loads, so none of the
@@ -364,8 +386,8 @@ $_user" >/dev/null 2>"$_errf" &
       # No timeout(1) on stock macOS, so background the call and kill on expiry.
       ( cd "${TMPDIR:-/tmp}" 2>/dev/null
         export CLAUDISH_ENABLED=0
-        if [ -n "${CLAUDISH_CLAUDE_OAUTH_TOKEN:-}" ]; then
-          export CLAUDE_CODE_OAUTH_TOKEN="$CLAUDISH_CLAUDE_OAUTH_TOKEN"
+        if [ -n "$_tok" ]; then
+          export CLAUDE_CODE_OAUTH_TOKEN="$_tok"
         fi
         exec claude -p --model "$MODEL" \
           ${CLAUDE_EFFORT_ARG:+--effort "$CLAUDE_EFFORT_ARG"} \
@@ -373,6 +395,7 @@ $_user" >/dev/null 2>"$_errf" &
           --strict-mcp-config --no-session-persistence --output-format json
       ) <"$_in" >"$_out" 2>"$_errf" &
       _pid=$!
+      _tok=""
       _t=0
       while kill -0 "$_pid" 2>/dev/null; do
         if [ "$_t" -ge "$LLM_TIMEOUT" ]; then
@@ -492,6 +515,8 @@ llm_notice_why() {
     claude)
       if ! command -v claude >/dev/null 2>&1; then
         NOTICE_WHY="the claude CLI is not on PATH (install Claude Code or pick another CLAUDISH_PROVIDER), so rewrites are off"
+      elif [ "${cfgerr:-0}" = "1" ]; then
+        NOTICE_WHY="${err:-provider configuration error}"
       elif [ "${truncated:-0}" = "1" ]; then
         NOTICE_WHY="the rewrite hit the model's output-token limit and was discarded rather than shown half-finished — use a shorter message"
       elif [ "$curl_rc" = "28" ]; then
@@ -500,7 +525,7 @@ llm_notice_why() {
         # Claude Code strips CLAUDE_CODE_OAUTH_TOKEN from every hook's
         # environment, so a session that logs in through that variable leaves
         # the child with no credentials unless one of these is in place.
-        NOTICE_WHY="the claude CLI is not logged in for hooks (Claude Code does not pass CLAUDE_CODE_OAUTH_TOKEN to them) — set CLAUDISH_CLAUDE_OAUTH_TOKEN to a \`claude setup-token\` token, or run \`claude auth login\` once; rewrites are off"
+        NOTICE_WHY="the claude CLI is not logged in for hooks (Claude Code does not pass CLAUDE_CODE_OAUTH_TOKEN to them) — set CLAUDISH_CLAUDE_OAUTH_TOKEN or CLAUDISH_CLAUDE_TOKEN_HELPER to supply a \`claude setup-token\` token, or run \`claude auth login\` once; rewrites are off"
       elif [ -n "${err:-}" ]; then
         NOTICE_WHY="claude error: ${err}"
       fi

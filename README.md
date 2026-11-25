@@ -570,12 +570,24 @@ never show up in `claude --resume`. `CLAUDISH_CLAUDE_EFFORT` sets its effort
 **Logging in.** A login stored by `claude auth login` (or `/login`) reaches the
 child as is. A session that logs in through `CLAUDE_CODE_OAUTH_TOKEN` (a
 `claude setup-token` token) does not: Claude Code strips that variable from
-every hook's environment. For that setup, put a `claude setup-token` token in
-`CLAUDISH_CLAUDE_OAUTH_TOKEN`, wherever you keep `CLAUDE_CODE_OAUTH_TOKEN`
-itself (your shell or OS environment, not a settings file you check in). The
-hook hands it to the child as `CLAUDE_CODE_OAUTH_TOKEN` through the
-environment, never the command line. With neither in place, the
-once-per-session notice says so and rewrites stay off.
+every hook's environment. For that setup, supply a `claude setup-token` token
+one of two ways:
+
+- `CLAUDISH_CLAUDE_OAUTH_TOKEN` holds the token itself. Set it wherever you
+  keep `CLAUDE_CODE_OAUTH_TOKEN` (your shell or OS environment, not a settings
+  file you check in).
+- `CLAUDISH_CLAUDE_TOKEN_HELPER` is a command that prints the token, like
+  Claude Code's own `apiKeyHelper`, so the token can stay in a password
+  manager. It runs (with `sh -c`) on every rewrite, so its time adds to each
+  one. For 1Password:
+
+  ```json
+  "CLAUDISH_CLAUDE_TOKEN_HELPER": "op read --no-newline 'op://Private/Claude setup token/credential'"
+  ```
+
+The hook hands the token to the child as `CLAUDE_CODE_OAUTH_TOKEN` through the
+environment, never the command line. With none of these in place, or a helper
+that prints nothing, the once-per-session notice says so and rewrites stay off.
 
 Each rewrite starts a fresh `claude` process, so expect a few seconds per
 message on top of the model's own time. Requires `claude` on PATH; fails open
@@ -691,6 +703,7 @@ Notes:
 | `CLAUDISH_CODEX_EFFORT` | *(unset)* | `model_reasoning_effort` for the codex provider (e.g. `low`). Unset uses the codex CLI's configured effort. Applies to the rewrite only. |
 | `CLAUDISH_CLAUDE_EFFORT` | `low` | `--effort` for the claude provider. Set explicitly empty to omit the flag. The child loads no settings, so your own `effortLevel` never applies to it. |
 | `CLAUDISH_CLAUDE_OAUTH_TOKEN` | *(unset)* | A `claude setup-token` token for the claude provider, handed to the child as `CLAUDE_CODE_OAUTH_TOKEN`. Needed only when your sessions log in through `CLAUDE_CODE_OAUTH_TOKEN`, which Claude Code strips from hooks. See [claude](#claude). |
+| `CLAUDISH_CLAUDE_TOKEN_HELPER` | *(unset)* | A command (run with `sh -c`) that prints that token, like Claude Code's `apiKeyHelper`, for keeping it in a password manager. Used when `CLAUDISH_CLAUDE_OAUTH_TOKEN` is unset; runs on every rewrite. See [claude](#claude). |
 | `CLAUDISH_MAX_TOKENS` | `4096` | Completion cap for the anthropic provider. Rewrites that hit the cap are discarded (fail-open), with a notice to raise it. |
 | `CLAUDISH_MIN_CHARS` | `200` | Skip messages/files whose prose (code stripped) is shorter than this. Counted in **characters**, so one threshold means the same length in every script. |
 | `CLAUDISH_STUB` | `0` | `1` = deterministic stub instead of the model (for testing display mechanics). |

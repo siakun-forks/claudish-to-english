@@ -22,12 +22,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     second guard against the plugin rewriting its own rewrite.
   - `CLAUDISH_CLAUDE_EFFORT` sets `--effort` (default `low`; empty omits it).
     The child loads no settings, so the user's `effortLevel` never applies.
-  - `CLAUDISH_CLAUDE_OAUTH_TOKEN` covers sessions that log in through
-    `CLAUDE_CODE_OAUTH_TOKEN` (`claude setup-token`). Claude Code strips that
-    variable from every hook's environment, so without a stored login the
-    child would start logged out. The token reaches the child through its
-    environment, never its command line, and the notice for a logged-out
-    child names both fixes.
+  - `CLAUDISH_CLAUDE_OAUTH_TOKEN` and `CLAUDISH_CLAUDE_TOKEN_HELPER` cover
+    sessions that log in through `CLAUDE_CODE_OAUTH_TOKEN` (`claude
+    setup-token`). Claude Code strips that variable from every hook's
+    environment, so without a stored login the child would start logged out.
+    The first holds the token; the second is a command that prints it, like
+    Claude Code's `apiKeyHelper`, so the token can stay in a password manager
+    instead of the environment. Either way the token reaches the child through
+    its environment, never its command line, and the notice for a logged-out
+    child or a helper that prints nothing says what to fix.
   - The message travels on stdin, not argv, which Windows caps at 32K
     characters.
 
